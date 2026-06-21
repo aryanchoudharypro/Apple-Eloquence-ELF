@@ -42,8 +42,12 @@ android {
     // They install into the read-only nativeLibraryDir, where dlopen of
     // executable code is permitted (writable app storage is not).
     packaging {
-        // Keep the page-aligned engine libs uncompressed so they mmap directly.
-        jniLibs { useLegacyPackaging = false }
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
     }
 
     buildTypes {
@@ -62,4 +66,6 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("androidx.preference:preference-ktx:1.2.1")
 }

@@ -17,12 +17,12 @@
  *     side writes it into dataDir and we chdir there before eciNew.
  */
 #include <jni.h>
-#include <dlfcn.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <stdint.h>
+#include <dlfcn.h>
+#include <stdlib.h>
 #include <android/log.h>
+#include <pthread.h>
 
 #define LOG_TAG "EloquenceJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -44,6 +44,8 @@ typedef int     (*fn_Delete)(ECIHand);
 typedef void    (*fn_Version)(char *);
 typedef int     (*fn_SetParam)(ECIHand, int, int);
 typedef int     (*fn_SetVoiceParam)(ECIHand, int, int, int);
+typedef int     (*fn_GetVoiceParam)(ECIHand, int, int);
+typedef int     (*fn_CopyVoice)(ECIHand, int, int);
 typedef int     (*fn_AddText)(ECIHand, ECIInputText);
 typedef int     (*fn_Synthesize)(ECIHand);
 typedef int     (*fn_Synchronize)(ECIHand);
@@ -60,6 +62,8 @@ typedef struct {
     fn_Delete         Delete;
     fn_SetParam       SetParam;
     fn_SetVoiceParam  SetVoiceParam;
+    fn_GetVoiceParam  GetVoiceParam;
+    fn_CopyVoice      CopyVoice;
     fn_AddText        AddText;
     fn_Synthesize     Synthesize;
     fn_Synchronize    Synchronize;
@@ -70,7 +74,11 @@ typedef struct {
     short *pcm;                /* accumulation buffer for the active utterance */
     long   pcm_len;
     long   pcm_cap;
-    int    abort;             /* set by Java onStop to short-circuit          */
+    long   pcm_read;
+    int    abort;
+    pthread_mutex_t mutex;
+    pthread_t thread;
+    int    is_speaking;
 } Engine;
 
 static enum ECICallbackReturn pcm_cb(ECIHand h, enum ECIMessage msg,
@@ -79,17 +87,22 @@ static enum ECICallbackReturn pcm_cb(ECIHand h, enum ECIMessage msg,
     Engine *e = (Engine *)pData;
     if (e->abort) return eciDataAbort;
     if (msg != eciWaveformBuffer || lParam <= 0) return eciDataProcessed;
+    pthread_mutex_lock(&e->mutex);
     long need = e->pcm_len + lParam;
     if (need > e->pcm_cap) {
         long ncap = e->pcm_cap ? e->pcm_cap * 2 : 65536;
         while (ncap < need) ncap *= 2;
         short *p = (short *)realloc(e->pcm, (size_t)ncap * sizeof(short));
-        if (!p) return eciDataAbort;
+        if (!p) {
+            pthread_mutex_unlock(&e->mutex);
+            return eciDataAbort;
+        }
         e->pcm = p;
         e->pcm_cap = ncap;
     }
     memcpy(e->pcm + e->pcm_len, e->chunk, (size_t)lParam * sizeof(short));
     e->pcm_len += lParam;
+    pthread_mutex_unlock(&e->mutex);
     return eciDataProcessed;
 }
 
@@ -112,13 +125,14 @@ Java_com_eloquence_tts_EloquenceNative_nativeInit(JNIEnv *env, jclass clazz,
 
     char path[1024];
     snprintf(path, sizeof path, "%s/eci.so", dataDir);
-    void *lib = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
+    void *lib = dlopen("libeci.so", RTLD_NOW | RTLD_GLOBAL);
     (*env)->ReleaseStringUTFChars(env, jDataDir, dataDir);
     if (!lib) { LOGE("dlopen eci.so: %s", dlerror()); return 0; }
 
     Engine *e = (Engine *)calloc(1, sizeof(Engine));
     if (!e) { dlclose(lib); return 0; }
     e->lib = lib;
+    pthread_mutex_init(&e->mutex, NULL);
 
     fn_NewEx            NewEx            = (fn_NewEx)sym(lib, "eciNewEx");
     fn_New              New              = (fn_New)sym(lib, "eciNew");
@@ -126,6 +140,8 @@ Java_com_eloquence_tts_EloquenceNative_nativeInit(JNIEnv *env, jclass clazz,
     e->Delete          = (fn_Delete)sym(lib, "eciDelete");
     e->SetParam        = (fn_SetParam)sym(lib, "eciSetParam");
     e->SetVoiceParam   = (fn_SetVoiceParam)sym(lib, "eciSetVoiceParam");
+    e->GetVoiceParam   = (fn_GetVoiceParam)sym(lib, "eciGetVoiceParam");
+    e->CopyVoice       = (fn_CopyVoice)sym(lib, "eciCopyVoice");
     e->AddText         = (fn_AddText)sym(lib, "eciAddText");
     e->Synthesize      = (fn_Synthesize)sym(lib, "eciSynthesize");
     e->Synchronize     = (fn_Synchronize)sym(lib, "eciSynchronize");
@@ -188,6 +204,83 @@ Java_com_eloquence_tts_EloquenceNative_nativeSynthesize(JNIEnv *env, jclass c,
     return out;
 }
 
+
+struct SynthTask {
+    Engine *e;
+    char *text;
+};
+
+static void *synth_thread(void *arg) {
+    struct SynthTask *task = (struct SynthTask *)arg;
+    Engine *e = task->e;
+    e->AddText(e->eci, (ECIInputText)task->text);
+    e->Synthesize(e->eci);
+    if (e->Synchronize) e->Synchronize(e->eci);
+    free(task->text);
+    free(task);
+    
+    pthread_mutex_lock(&e->mutex);
+    e->is_speaking = 0;
+    pthread_mutex_unlock(&e->mutex);
+    return NULL;
+}
+
+JNIEXPORT void JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativeStartSynthesis(JNIEnv *env, jclass c, jlong handle, jstring jText) {
+    (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e) return;
+    
+    if (e->thread) {
+        pthread_join(e->thread, NULL);
+        e->thread = 0;
+    }
+
+    struct SynthTask *task = malloc(sizeof(struct SynthTask));
+    task->e = e;
+    const char *text = (*env)->GetStringUTFChars(env, jText, NULL);
+    task->text = strdup(text);
+    (*env)->ReleaseStringUTFChars(env, jText, text);
+
+    pthread_mutex_lock(&e->mutex);
+    e->pcm_len = 0;
+    e->pcm_read = 0;
+    e->abort = 0;
+    e->is_speaking = 1;
+    pthread_mutex_unlock(&e->mutex);
+
+    pthread_create(&e->thread, NULL, synth_thread, task);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativeIsSpeaking(JNIEnv *env, jclass c, jlong handle) {
+    (void)env; (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e) return JNI_FALSE;
+    pthread_mutex_lock(&e->mutex);
+    int speaking = e->is_speaking;
+    pthread_mutex_unlock(&e->mutex);
+    return speaking ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativePollAudio(JNIEnv *env, jclass c, jlong handle, jshortArray outBuf) {
+    (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e) return 0;
+    
+    jsize max_len = (*env)->GetArrayLength(env, outBuf);
+    pthread_mutex_lock(&e->mutex);
+    long avail = e->pcm_len - e->pcm_read;
+    long to_copy = (avail > max_len) ? max_len : avail;
+    if (to_copy > 0) {
+        (*env)->SetShortArrayRegion(env, outBuf, 0, to_copy, e->pcm + e->pcm_read);
+        e->pcm_read += to_copy;
+    }
+    pthread_mutex_unlock(&e->mutex);
+    return to_copy;
+}
+
 JNIEXPORT void JNICALL
 Java_com_eloquence_tts_EloquenceNative_nativeStop(JNIEnv *env, jclass c, jlong handle) {
     (void)env; (void)c;
@@ -209,4 +302,36 @@ Java_com_eloquence_tts_EloquenceNative_nativeShutdown(JNIEnv *env, jclass c, jlo
      * an explicit dlclose can fire them in the wrong order. (Same rationale as
      * examples/speak.c.) */
     free(e);
+}
+
+JNIEXPORT void JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativeSetVoice(JNIEnv *env, jclass c, jlong handle, jint voice) {
+    (void)env; (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e || !e->CopyVoice) return;
+    pthread_mutex_lock(&e->mutex);
+    e->CopyVoice(e->eci, voice, 0);
+    pthread_mutex_unlock(&e->mutex);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativeGetPitch(JNIEnv *env, jclass c, jlong handle) {
+    (void)env; (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e || !e->GetVoiceParam) return 65;
+    pthread_mutex_lock(&e->mutex);
+    int p = e->GetVoiceParam(e->eci, 0, eciPitchBaseline);
+    pthread_mutex_unlock(&e->mutex);
+    return p;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_eloquence_tts_EloquenceNative_nativeSetDialect(JNIEnv *env, jclass c, jlong handle, jint dialect) {
+    (void)env; (void)c;
+    Engine *e = (Engine *)(intptr_t)handle;
+    if (!e || !e->SetParam) return JNI_FALSE;
+    pthread_mutex_lock(&e->mutex);
+    int res = e->SetParam(e->eci, eciLanguageDialect, dialect);
+    pthread_mutex_unlock(&e->mutex);
+    return (res != 0) ? JNI_TRUE : JNI_FALSE;
 }

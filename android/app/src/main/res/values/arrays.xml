@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="voice_names">
+        <item>Reed</item>
+        <item>Shelly</item>
+        <item>Grandma</item>
+        <item>Grandpa</item>
+        <item>Rocco</item>
+        <item>Glen</item>
+        <item>Sandy</item>
+        <item>Bobby</item>
+    </string-array>
+    
+    <string-array name="voice_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+    </string-array>
+    
+    <string-array name="language_names">
+        <item>System Default</item>
+        <item>English (US)</item>
+        <item>English (UK)</item>
+        <item>Spanish (Spain)</item>
+        <item>Spanish (Mexico)</item>
+        <item>French (France)</item>
+        <item>French (Canada)</item>
+        <item>German</item>
+        <item>Italian</item>
+        <item>Portuguese (Brazil)</item>
+        <item>Finnish</item>
+        <item>Chinese (Simplified)</item>
+        <item>Chinese (Traditional)</item>
+        <item>Japanese</item>
+        <item>Korean</item>
+    </string-array>
+    
+    <string-array name="language_values">
+        <item>system</item>
+        <item>eng-USA</item>
+        <item>eng-GBR</item>
+        <item>spa-ESP</item>
+        <item>spa-MEX</item>
+        <item>fra-FRA</item>
+        <item>fra-CAN</item>
+        <item>deu-DEU</item>
+        <item>ita-ITA</item>
+        <item>por-BRA</item>
+        <item>fin-FIN</item>
+        <item>zho-CHN</item>
+        <item>zho-TWN</item>
+        <item>jpn-JPN</item>
+        <item>kor-KOR</item>
+    </string-array>
+</resources>

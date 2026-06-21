@@ -23,6 +23,7 @@ import android.speech.tts.SynthesisRequest
 import android.speech.tts.TextToSpeech
 import android.speech.tts.TextToSpeechService
 import android.util.Log
+import androidx.preference.PreferenceManager
 import java.io.File
 
 private const val TAG = "EloquenceTts"
@@ -105,21 +106,72 @@ class EloquenceTtsService : TextToSpeechService() {
     // --- synthesis ---------------------------------------------------------
 
     override fun onSynthesizeText(request: SynthesisRequest, callback: SynthesisCallback) {
-        val v = match(request.language, request.country)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val forceLang = prefs.getString("pref_language", "system") ?: "system"
+
+        val effectiveLang = if (forceLang != "system") forceLang.substring(0, 3) else request.language
+        val effectiveCountry = if (forceLang != "system" && forceLang.length >= 7) forceLang.substring(4, 7) else request.country
+
+        val v = match(effectiveLang, effectiveCountry)
         if (v == null) { callback.error(); return }
 
         val text = request.charSequenceText?.toString().orEmpty()
         synchronized(lock) {
             if (!ensureEngine(v.dialect)) { callback.error(); return }
-            // Android speechRate/pitch are percent (100 = normal). Map to ECI:
-            // eciSpeed 0..250 (≈50 normal); eciPitchBaseline ≈69 normal.
-            val rate = (request.speechRate * 50 / 100).coerceIn(0, 250)
-            val pitch = (69 * request.pitch / 100).coerceIn(0, 100)
-            EloquenceNative.nativeSetProsody(handle, rate, pitch, -1)
+            
+            val overridePitch = prefs.getBoolean("pref_override_pitch", false)
+            val prefPitch = prefs.getInt("pref_pitch", 50)
+            val rateMultiplier = prefs.getInt("pref_rate_multiplier", 100)
+            val voicePersona = prefs.getString("pref_voice", "1")?.toIntOrNull() ?: 1
+            
+            // Set the voice persona FIRST so we can query its natural default pitch if needed
+            EloquenceNative.nativeSetVoice(handle, voicePersona)
 
-            val pcm = EloquenceNative.nativeSynthesize(handle, text)
-            if (pcm == null) { callback.error(); return }
-            deliver(pcm, callback)
+            val rate = (request.speechRate * 50 * rateMultiplier / 10000).coerceIn(0, 250)
+            
+            val pitchArg = if (overridePitch) {
+                // NVDA style: absolute base pitch
+                (prefPitch * request.pitch / 100).coerceIn(0, 100)
+            } else {
+                // Android/CodeFactory style: scale the voice's natural pitch
+                if (request.pitch == 100) {
+                    -1 // use pristine natural pitch
+                } else {
+                    val base = EloquenceNative.nativeGetPitch(handle)
+                    val effectiveBase = if (base > 0) base else 65
+                    (effectiveBase * request.pitch / 100).coerceIn(0, 100)
+                }
+            }
+            
+            EloquenceNative.nativeSetProsody(handle, rate, pitchArg, -1)
+
+            callback.start(SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
+            EloquenceNative.nativeStartSynthesis(handle, text)
+
+            val shortBuf = ShortArray(4096)
+            val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
+            val byteBuf = ByteArray(maxOf(shortBuf.size * 2, maxBytes))
+
+            while (EloquenceNative.nativeIsSpeaking(handle)) {
+                val n = EloquenceNative.nativePollAudio(handle, shortBuf)
+                if (n > 0) {
+                    deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+                } else {
+                    Thread.sleep(10)
+                }
+            }
+            
+            // Drain remaining audio
+            while (true) {
+                val n = EloquenceNative.nativePollAudio(handle, shortBuf)
+                if (n > 0) {
+                    deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+                } else {
+                    break
+                }
+            }
+            
+            callback.done()
         }
     }
 
@@ -127,28 +179,33 @@ class EloquenceTtsService : TextToSpeechService() {
         synchronized(lock) { if (handle != 0L) EloquenceNative.nativeStop(handle) }
     }
 
-    private fun deliver(pcm: ShortArray, callback: SynthesisCallback) {
-        callback.start(SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
-        val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
-        val bytes = ByteArray(pcm.size * 2)
-        for (i in pcm.indices) {
+    private fun deliverBuffer(pcm: ShortArray, len: Int, bytes: ByteArray, maxBytes: Int, callback: SynthesisCallback) {
+        for (i in 0 until len) {
             bytes[i * 2]     = (pcm[i].toInt() and 0xFF).toByte()
             bytes[i * 2 + 1] = ((pcm[i].toInt() shr 8) and 0xFF).toByte()
         }
         var off = 0
-        while (off < bytes.size) {
-            val n = minOf(maxBytes, bytes.size - off)
+        val totalBytes = len * 2
+        while (off < totalBytes) {
+            val n = minOf(maxBytes, totalBytes - off)
             if (callback.audioAvailable(bytes, off, n) != TextToSpeech.SUCCESS) break
             off += n
         }
-        callback.done()
     }
 
     // --- engine lifecycle --------------------------------------------------
 
     private fun ensureEngine(dialect: Int): Boolean {
         if (handle != 0L && dialect == currentDialect) return true
-        if (handle != 0L) { EloquenceNative.nativeShutdown(handle); handle = 0 }
+        if (handle != 0L) {
+            val success = EloquenceNative.nativeSetDialect(handle, dialect)
+            if (success) {
+                currentDialect = dialect
+                return true
+            }
+            EloquenceNative.nativeShutdown(handle)
+            handle = 0L
+        }
         handle = EloquenceNative.nativeInit(filesDir.absolutePath, dialect)
         if (handle == 0L) { Log.e(TAG, "nativeInit failed for dialect 0x%08x".format(dialect)); return false }
         currentDialect = dialect

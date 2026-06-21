@@ -1,33 +1,48 @@
-/*
- * SPDX-License-Identifier: MIT
- *
- * EloquenceNative -- thin Kotlin view of libeloquence_jni.so. Each method maps
- * 1:1 to a Java_com_eloquence_tts_EloquenceNative_* entry point in
- * android/jni/eloquence_jni.c.
- */
 package com.eloquence.tts
 
+/**
+ * JNI bindings for libeloquence_jni.so (which bridges to eci.so).
+ */
 object EloquenceNative {
     init { System.loadLibrary("eloquence_jni") }
 
-    /**
-     * Initialise an engine instance.
-     * @param dataDir directory holding eci.ini (cwd for the engine).
-     * @param dialect eciLanguageDialect code (e.g. 0x00010000 = US English),
-     *                or 0 for the engine default.
-     * @return opaque native handle, or 0 on failure.
-     */
+    /** Initialize the engine. Returns a handle, or 0 on failure. */
+    @JvmStatic
     external fun nativeInit(dataDir: String, dialect: Int): Long
 
-    /** Set speed/pitch/volume; pass -1 to leave a field unchanged. */
+    /** Shut down and destroy the engine. */
+    @JvmStatic
+    external fun nativeShutdown(handle: Long)
+
+    /** Set synthesis parameters. Pass -1 to leave a parameter unchanged. */
+    @JvmStatic
     external fun nativeSetProsody(handle: Long, rate: Int, pitch: Int, volume: Int)
 
-    /** Synthesize one utterance -> 11025 Hz mono S16 PCM, or null on abort. */
-    external fun nativeSynthesize(handle: Long, text: String): ShortArray?
+    /** Start synthesis asynchronously. */
+    @JvmStatic
+    external fun nativeStartSynthesis(handle: Long, text: String)
 
-    /** Abort the in-flight utterance (called from onStop). */
+    /** Set the voice persona (1-8). */
+    @JvmStatic
+    external fun nativeSetVoice(handle: Long, voice: Int)
+
+    /** Get the current baseline pitch of the engine. */
+    @JvmStatic
+    external fun nativeGetPitch(handle: Long): Int
+
+    /** Switch the engine to a new language dialect dynamically. */
+    @JvmStatic
+    external fun nativeSetDialect(handle: Long, dialect: Int): Boolean
+
+    /** Check if the engine is currently synthesizing. */
+    @JvmStatic
+    external fun nativeIsSpeaking(handle: Long): Boolean
+
+    /** Poll PCM audio from the engine. Returns number of shorts copied. */
+    @JvmStatic
+    external fun nativePollAudio(handle: Long, outBuf: ShortArray): Int
+
+    /** Signal the engine to abort synthesis. */
+    @JvmStatic
     external fun nativeStop(handle: Long)
-
-    /** Tear down the engine instance. */
-    external fun nativeShutdown(handle: Long)
 }

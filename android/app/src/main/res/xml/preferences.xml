@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    
+    <PreferenceCategory android:title="Speech Settings">
+        
+        <SwitchPreferenceCompat
+            android:key="pref_override_pitch"
+            android:title="Override Default Pitch"
+            android:summary="Enable to manually set the base pitch (like NVDA). Disable to use each voice's natural pitch."
+            android:defaultValue="false" />
+
+        <SeekBarPreference
+            android:key="pref_pitch"
+            android:dependency="pref_override_pitch"
+            android:title="Default Pitch"
+            android:summary="Adjust the absolute base pitch of the Eloquence voice"
+            android:defaultValue="50"
+            android:max="100"
+            app:min="0"
+            app:showSeekBarValue="true" />
+            
+        <SeekBarPreference
+            android:key="pref_rate_multiplier"
+            android:title="Speech Rate Multiplier"
+            android:summary="Multiply the speech rate requested by the system"
+            android:defaultValue="100"
+            android:max="200"
+            app:min="10"
+            app:showSeekBarValue="true" />
+            
+        <ListPreference
+            android:key="pref_voice"
+            android:title="Voice Persona"
+            android:summary="Select the Eloquence voice (e.g., Reed, Shelly)"
+            android:defaultValue="1"
+            android:entries="@array/voice_names"
+            android:entryValues="@array/voice_values" />
+
+        <ListPreference
+            android:key="pref_language"
+            android:title="Force Language"
+            android:summary="Override the system language (default is System)"
+            android:defaultValue="system"
+            android:entries="@array/language_names"
+            android:entryValues="@array/language_values" />
+            
+    </PreferenceCategory>
+    
+</PreferenceScreen>

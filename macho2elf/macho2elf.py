@@ -80,7 +80,13 @@ VARIADIC_SHIMS = {
     "__sprintf_chk":  "m2e_va_sprintf_chk",
     # takes an (Apple) va_list
     "vfprintf":       "m2e_vl_vfprintf",
+    "vsnprintf":      "m2e_vl_vsnprintf",
+    "vsprintf":       "m2e_vl_vsprintf",
+    "vsscanf":        "m2e_vl_vsscanf",
     "__vsprintf_chk": "m2e_vl_vsprintf_chk",
+    # Apple jmp_buf is 192 bytes, Android is 256. Buffer overrun fix:
+    "setjmp":         "m2e_setjmp",
+    "longjmp":        "m2e_longjmp",
 }
 
 # Bionic (Android libc) differs from glibc for a few accessors; these override
@@ -990,7 +996,50 @@ M2E_VA_TRAMPOLINE(m2e_va_sscanf,      vsscanf,        x2)
 M2E_VA_TRAMPOLINE(m2e_va_snprintf,    vsnprintf,      x3)
 M2E_VA_TRAMPOLINE(m2e_va_sprintf_chk, __vsprintf_chk, x4)
 M2E_VL_SHIM(m2e_vl_vfprintf,      vfprintf,       x2)
+M2E_VL_SHIM(m2e_vl_vsnprintf,     vsnprintf,      x3)
+M2E_VL_SHIM(m2e_vl_vsprintf,      vsprintf,       x2)
+M2E_VL_SHIM(m2e_vl_vsscanf,       vsscanf,        x2)
 M2E_VL_SHIM(m2e_vl_vsprintf_chk,  __vsprintf_chk, x4)
+
+"   .global m2e_setjmp\n"
+"   .type m2e_setjmp, %function\n"
+"m2e_setjmp:\n"
+"   stp x19, x20, [x0, #0]\n"
+"   stp x21, x22, [x0, #16]\n"
+"   stp x23, x24, [x0, #32]\n"
+"   stp x25, x26, [x0, #48]\n"
+"   stp x27, x28, [x0, #64]\n"
+"   stp x29, x30, [x0, #80]\n"
+"   mov x1, sp\n"
+"   str x1, [x0, #96]\n"
+"   stp d8, d9, [x0, #112]\n"
+"   stp d10, d11, [x0, #128]\n"
+"   stp d12, d13, [x0, #144]\n"
+"   stp d14, d15, [x0, #160]\n"
+"   mov x0, #0\n"
+"   ret\n"
+"   .size m2e_setjmp, .-m2e_setjmp\n"
+
+"   .global m2e_longjmp\n"
+"   .type m2e_longjmp, %function\n"
+"m2e_longjmp:\n"
+"   ldp x19, x20, [x0, #0]\n"
+"   ldp x21, x22, [x0, #16]\n"
+"   ldp x23, x24, [x0, #32]\n"
+"   ldp x25, x26, [x0, #48]\n"
+"   ldp x27, x28, [x0, #64]\n"
+"   ldp x29, x30, [x0, #80]\n"
+"   ldr x2, [x0, #96]\n"
+"   mov sp, x2\n"
+"   ldp d8, d9, [x0, #112]\n"
+"   ldp d10, d11, [x0, #128]\n"
+"   ldp d12, d13, [x0, #144]\n"
+"   ldp d14, d15, [x0, #160]\n"
+"   cmp x1, #0\n"
+"   cinc x1, x1, eq\n"
+"   mov x0, x1\n"
+"   ret\n"
+"   .size m2e_longjmp, .-m2e_longjmp\n"
 
 // __chkstk_darwin (Apple ___chkstk_darwin, underscore-stripped) — Apple's
 // arm64 large-frame stack-probe, emitted in prologues that allocate big
