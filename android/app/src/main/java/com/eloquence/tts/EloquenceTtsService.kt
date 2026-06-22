@@ -61,6 +61,7 @@ class EloquenceTtsService : TextToSpeechService() {
     private var handle: Long = 0
     private var currentDialect: Int = 0
     private val lock = Any()
+    @Volatile private var isStopped = false
 
     override fun onCreate() {
         // Engine + eci.ini must exist before the base class wires up languages.
@@ -115,7 +116,9 @@ class EloquenceTtsService : TextToSpeechService() {
         val v = match(effectiveLang, effectiveCountry)
         if (v == null) { callback.error(); return }
 
+        isStopped = false
         val text = request.charSequenceText?.toString().orEmpty()
+        
         synchronized(lock) {
             if (!ensureEngine(v.dialect)) { callback.error(); return }
             
@@ -130,12 +133,10 @@ class EloquenceTtsService : TextToSpeechService() {
             val rate = (request.speechRate * 50 * rateMultiplier / 10000).coerceIn(0, 250)
             
             val pitchArg = if (overridePitch) {
-                // NVDA style: absolute base pitch
                 (prefPitch * request.pitch / 100).coerceIn(0, 100)
             } else {
-                // Android/CodeFactory style: scale the voice's natural pitch
                 if (request.pitch == 100) {
-                    -1 // use pristine natural pitch
+                    -1
                 } else {
                     val base = EloquenceNative.nativeGetPitch(handle)
                     val effectiveBase = if (base > 0) base else 65
@@ -146,11 +147,11 @@ class EloquenceTtsService : TextToSpeechService() {
             EloquenceNative.nativeSetProsody(handle, rate, pitchArg, -1)
 
             val charsetName = when (currentDialect) {
-                0x060000 -> "GB18030" // Mandarin
-                0x080000 -> "Shift_JIS" // Japanese
-                0x0A0000 -> "EUC-KR" // Korean
-                0x060001 -> "Big5" // Taiwanese
-                else -> "windows-1252" // Default for all non-CJK (Apple engine uses cp1252)
+                0x060000 -> "GB18030"
+                0x080000 -> "Shift_JIS"
+                0x0A0000 -> "EUC-KR"
+                0x060001 -> "Big5"
+                else -> "windows-1252"
             }
             
             val bytes = try {
@@ -161,39 +162,47 @@ class EloquenceTtsService : TextToSpeechService() {
 
             callback.start(SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
             EloquenceNative.nativeStartSynthesis(handle, bytes)
-
-            val shortBuf = ShortArray(4096)
-            val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
-            val byteBuf = ByteArray(maxOf(shortBuf.size * 2, maxBytes))
-
-            while (EloquenceNative.nativeIsSpeaking(handle)) {
-                val n = EloquenceNative.nativePollAudio(handle, shortBuf)
-                if (n > 0) {
-                    deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
-                } else {
-                    Thread.sleep(10)
-                }
-            }
-            
-            // Drain remaining audio
-            while (true) {
-                val n = EloquenceNative.nativePollAudio(handle, shortBuf)
-                if (n > 0) {
-                    deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
-                } else {
-                    break
-                }
-            }
-            
-            callback.done()
         }
+
+        val shortBuf = ShortArray(4096)
+        val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
+        val byteBuf = ByteArray(maxOf(shortBuf.size * 2, maxBytes))
+
+        while (EloquenceNative.nativeIsSpeaking(handle) && !isStopped) {
+            val n = EloquenceNative.nativePollAudio(handle, shortBuf)
+            if (n > 0) {
+                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+            } else {
+                Thread.sleep(10)
+            }
+        }
+        
+        // Drain remaining audio
+        while (!isStopped) {
+            val n = EloquenceNative.nativePollAudio(handle, shortBuf)
+            if (n > 0) {
+                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+            } else {
+                break
+            }
+        }
+        
+        // Block until the native synthesis thread actually finishes exiting
+        // so we don't start a new synthesis thread while the old one is still cleaning up.
+        while (EloquenceNative.nativeIsSpeaking(handle)) {
+            Thread.sleep(5)
+        }
+        
+        if (isStopped) callback.error() else callback.done()
     }
 
     override fun onStop() {
+        isStopped = true
         synchronized(lock) { if (handle != 0L) EloquenceNative.nativeStop(handle) }
     }
 
     private fun deliverBuffer(pcm: ShortArray, len: Int, bytes: ByteArray, maxBytes: Int, callback: SynthesisCallback) {
+        if (isStopped) return
         for (i in 0 until len) {
             bytes[i * 2]     = (pcm[i].toInt() and 0xFF).toByte()
             bytes[i * 2 + 1] = ((pcm[i].toInt() shr 8) and 0xFF).toByte()
@@ -201,6 +210,7 @@ class EloquenceTtsService : TextToSpeechService() {
         var off = 0
         val totalBytes = len * 2
         while (off < totalBytes) {
+            if (isStopped) return
             val n = minOf(maxBytes, totalBytes - off)
             if (callback.audioAvailable(bytes, off, n) != TextToSpeech.SUCCESS) break
             off += n

@@ -55,7 +55,7 @@ typedef void    (*fn_RegisterCallback)(ECIHand, ECICallback, void *);
 typedef int     (*fn_SetOutputBuffer)(ECIHand, int, short *);
 
 /* One engine instance per native handle. */
-#define CHUNK_SAMPLES 8192
+#define CHUNK_SAMPLES 1024
 typedef struct {
     void *lib;                 /* dlopen handle for eci.so                    */
     ECIHand eci;               /* engine handle                              */
@@ -70,7 +70,7 @@ typedef struct {
     fn_Speaking       Speaking;
     fn_Stop           Stop;
     fn_SetOutputBuffer SetOutputBuffer;
-    short  chunk[CHUNK_SAMPLES];
+    short  chunk[8192];
     short *pcm;                /* accumulation buffer for the active utterance */
     long   pcm_len;
     long   pcm_cap;
@@ -300,7 +300,10 @@ Java_com_eloquence_tts_EloquenceNative_nativeStop(JNIEnv *env, jclass c, jlong h
     (void)env; (void)c;
     Engine *e = (Engine *)(intptr_t)handle;
     if (!e) return;
+    pthread_mutex_lock(&e->mutex);
     e->abort = 1;
+    e->pcm_read = e->pcm_len; // discard all pending audio instantly
+    pthread_mutex_unlock(&e->mutex);
     if (e->Stop) e->Stop(e->eci);
 }
 
