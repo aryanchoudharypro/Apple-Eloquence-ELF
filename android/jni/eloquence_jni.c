@@ -183,11 +183,19 @@ Java_com_eloquence_tts_EloquenceNative_nativeSetProsody(JNIEnv *env, jclass c,
  * mono, S16). Returns null on failure/abort. */
 JNIEXPORT jshortArray JNICALL
 Java_com_eloquence_tts_EloquenceNative_nativeSynthesize(JNIEnv *env, jclass c,
-        jlong handle, jstring jText) {
+        jlong handle, jbyteArray jTextBytes) {
     (void)c;
     Engine *e = (Engine *)(intptr_t)handle;
     if (!e) return NULL;
-    const char *text = (*env)->GetStringUTFChars(env, jText, NULL);
+    
+    jsize len = (*env)->GetArrayLength(env, jTextBytes);
+    jbyte *bytes = (*env)->GetByteArrayElements(env, jTextBytes, NULL);
+    char *text = malloc(len + 1);
+    if (len > 0) {
+        memcpy(text, bytes, len);
+    }
+    text[len] = '\0';
+    (*env)->ReleaseByteArrayElements(env, jTextBytes, bytes, JNI_ABORT);
 
     e->pcm_len = 0;
     e->abort = 0;
@@ -196,7 +204,7 @@ Java_com_eloquence_tts_EloquenceNative_nativeSynthesize(JNIEnv *env, jclass c,
     if (e->Synchronize) e->Synchronize(e->eci);
     /* Apple's Synchronize is non-blocking; drain the worker thread. */
     if (e->Speaking) { int guard = 0; while (e->Speaking(e->eci) && !e->abort && guard++ < 100000) usleep(1000); }
-    (*env)->ReleaseStringUTFChars(env, jText, text);
+    free(text);
 
     if (e->abort || e->pcm_len == 0) return NULL;
     jshortArray out = (*env)->NewShortArray(env, (jsize)e->pcm_len);
@@ -226,7 +234,7 @@ static void *synth_thread(void *arg) {
 }
 
 JNIEXPORT void JNICALL
-Java_com_eloquence_tts_EloquenceNative_nativeStartSynthesis(JNIEnv *env, jclass c, jlong handle, jstring jText) {
+Java_com_eloquence_tts_EloquenceNative_nativeStartSynthesis(JNIEnv *env, jclass c, jlong handle, jbyteArray jTextBytes) {
     (void)c;
     Engine *e = (Engine *)(intptr_t)handle;
     if (!e) return;
@@ -238,9 +246,15 @@ Java_com_eloquence_tts_EloquenceNative_nativeStartSynthesis(JNIEnv *env, jclass 
 
     struct SynthTask *task = malloc(sizeof(struct SynthTask));
     task->e = e;
-    const char *text = (*env)->GetStringUTFChars(env, jText, NULL);
-    task->text = strdup(text);
-    (*env)->ReleaseStringUTFChars(env, jText, text);
+    
+    jsize len = (*env)->GetArrayLength(env, jTextBytes);
+    jbyte *bytes = (*env)->GetByteArrayElements(env, jTextBytes, NULL);
+    task->text = malloc(len + 1);
+    if (len > 0) {
+        memcpy(task->text, bytes, len);
+    }
+    task->text[len] = '\0';
+    (*env)->ReleaseByteArrayElements(env, jTextBytes, bytes, JNI_ABORT);
 
     pthread_mutex_lock(&e->mutex);
     e->pcm_len = 0;
@@ -304,14 +318,45 @@ Java_com_eloquence_tts_EloquenceNative_nativeShutdown(JNIEnv *env, jclass c, jlo
     free(e);
 }
 
+enum ECIVoiceParamExtended {
+    eciGender = 0,
+    eciHeadSize = 1,
+    eciPitchFluctuation = 3,
+    eciRoughness = 4,
+    eciBreathiness = 5
+};
+
+static const int g_voice_presets[8][8] = {
+    /* Gen Head PitchBase Fluct Rough Breath Speed Vol */
+    { 0, 50, 65, 30,  0,  0, 50,  92 }, /* 1: Reed */
+    { 1, 50, 81, 30,  0, 50, 50, 100 }, /* 2: Shelley */
+    { 1, 22, 93, 30,  0, 50, 50,  95 }, /* 3: Sandy */
+    { 0, 86, 56, 47,  0,  0, 50,  93 }, /* 4: Rocko */
+    { 1, 56, 89, 35,  0, 40, 50,  95 }, /* 5: Flo */
+    { 1, 45, 68, 30,  3, 40, 50,  90 }, /* 6: Grandma */
+    { 0, 30, 61, 44, 18, 20, 50,  90 }, /* 7: Grandpa */
+    { 0, 50, 69, 34,  0,  0, 50,  92 }, /* 8: Eddy */
+};
+
 JNIEXPORT void JNICALL
 Java_com_eloquence_tts_EloquenceNative_nativeSetVoice(JNIEnv *env, jclass c, jlong handle, jint voice) {
     (void)env; (void)c;
     Engine *e = (Engine *)(intptr_t)handle;
-    if (!e || !e->CopyVoice) return;
-    pthread_mutex_lock(&e->mutex);
-    e->CopyVoice(e->eci, voice, 0);
-    pthread_mutex_unlock(&e->mutex);
+    if (!e || !e->SetVoiceParam) return;
+    
+    if (voice >= 1 && voice <= 8) {
+        const int *p = g_voice_presets[voice - 1];
+        pthread_mutex_lock(&e->mutex);
+        e->SetVoiceParam(e->eci, 0, eciGender, p[0]);
+        e->SetVoiceParam(e->eci, 0, eciHeadSize, p[1]);
+        e->SetVoiceParam(e->eci, 0, eciPitchBaseline, p[2]);
+        e->SetVoiceParam(e->eci, 0, eciPitchFluctuation, p[3]);
+        e->SetVoiceParam(e->eci, 0, eciRoughness, p[4]);
+        e->SetVoiceParam(e->eci, 0, eciBreathiness, p[5]);
+        e->SetVoiceParam(e->eci, 0, eciSpeed, p[6]);
+        e->SetVoiceParam(e->eci, 0, eciVolume, p[7]);
+        pthread_mutex_unlock(&e->mutex);
+    }
 }
 
 JNIEXPORT jint JNICALL

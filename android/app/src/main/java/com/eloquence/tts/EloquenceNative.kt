@@ -18,9 +18,8 @@ object EloquenceNative {
     @JvmStatic
     external fun nativeSetProsody(handle: Long, rate: Int, pitch: Int, volume: Int)
 
-    /** Start synthesis asynchronously. */
-    @JvmStatic
-    external fun nativeStartSynthesis(handle: Long, text: String)
+    @JvmStatic external fun nativeSynthesize(handle: Long, text: ByteArray): ShortArray?
+    @JvmStatic external fun nativeStartSynthesis(handle: Long, text: ByteArray)
 
     /** Set the voice persona (1-8). */
     @JvmStatic
