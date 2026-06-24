@@ -70,11 +70,21 @@ class EloquenceTtsService : TextToSpeechService() {
     private var resamplePhase: Double = 0.0
     private var lastSample: Short = 0
 
+    private val deContext by lazy {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+            val ctx = createDeviceProtectedStorageContext()
+            ctx.moveSharedPreferencesFrom(this, packageName + "_preferences")
+            ctx
+        } else {
+            this
+        }
+    }
+
     override fun onCreate() {
         // Engine + eci.ini must exist before the base class wires up languages.
         writeEciIni()
         
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(deContext)
         val forceLang = prefs.getString("pref_language", "system") ?: "system"
         var dialectToLoad = VOICES.first().dialect
         
@@ -110,8 +120,17 @@ class EloquenceTtsService : TextToSpeechService() {
 
     private fun match(lang: String?, country: String?): Voice? {
         if (lang == null) return null
-        VOICES.firstOrNull { it.iso3Lang == lang && it.iso3Country == country }?.let { return it }
-        return VOICES.firstOrNull { it.iso3Lang == lang } // language-only fallback
+        
+        val iso3Lang = try {
+            if (lang.length == 2) java.util.Locale(lang).getISO3Language() else lang
+        } catch (e: Exception) { lang }
+        
+        val iso3Country = try {
+            if (country != null && country.length == 2) java.util.Locale("", country).getISO3Country() else country
+        } catch (e: Exception) { country }
+
+        VOICES.firstOrNull { it.iso3Lang.equals(iso3Lang, ignoreCase = true) && it.iso3Country.equals(iso3Country, ignoreCase = true) }?.let { return it }
+        return VOICES.firstOrNull { it.iso3Lang.equals(iso3Lang, ignoreCase = true) }
     }
 
     override fun onIsLanguageAvailable(lang: String?, country: String?, variant: String?): Int {
@@ -133,10 +152,36 @@ class EloquenceTtsService : TextToSpeechService() {
         return onIsLanguageAvailable(lang, country, variant)
     }
 
+    override fun onGetVoices(): MutableList<android.speech.tts.Voice> {
+        val voices = mutableListOf<android.speech.tts.Voice>()
+        for (v in VOICES) {
+            val locale = java.util.Locale(v.iso3Lang, v.iso3Country)
+            voices.add(android.speech.tts.Voice(
+                v.module,
+                locale,
+                android.speech.tts.Voice.QUALITY_VERY_HIGH,
+                android.speech.tts.Voice.LATENCY_VERY_LOW,
+                false,
+                null
+            ))
+        }
+        return voices
+    }
+
+    override fun onIsValidVoiceName(name: String?): Int {
+        return if (VOICES.any { it.module == name }) TextToSpeech.SUCCESS else TextToSpeech.ERROR
+    }
+
+    override fun onLoadVoice(name: String?): Int {
+        val v = VOICES.firstOrNull { it.module == name } ?: return TextToSpeech.ERROR
+        synchronized(lock) { ensureEngine(v.dialect) }
+        return TextToSpeech.SUCCESS
+    }
+
     // --- synthesis ---------------------------------------------------------
 
     override fun onSynthesizeText(request: SynthesisRequest, callback: SynthesisCallback) {
-        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val prefs = PreferenceManager.getDefaultSharedPreferences(deContext)
         val forceLang = prefs.getString("pref_language", "system") ?: "system"
 
         val effectiveLang = if (forceLang != "system") forceLang.substring(0, 3) else request.language
@@ -159,17 +204,22 @@ class EloquenceTtsService : TextToSpeechService() {
             
             val overridePitch = prefs.getBoolean("pref_override_pitch", false)
             val prefPitch = prefs.getInt("pref_pitch", 50)
-            val rateMultiplier = prefs.getInt("pref_rate_multiplier", 100)
+            val overrideRate = prefs.getBoolean("pref_override_rate", false)
+            val prefRate = prefs.getInt("pref_rate", 50)
             val volume = prefs.getInt("pref_volume", 100)
+            
+            val rate = if (overrideRate) {
+                prefRate.coerceIn(0, 250)
+            } else {
+                (request.speechRate * 50 / 100).coerceIn(0, 250)
+            }
             val voicePersona = prefs.getString("pref_voice", "1")?.toIntOrNull() ?: 1
             
             // Set the voice persona FIRST so we can query its natural default pitch if needed
             EloquenceNative.nativeSetVoice(handle, voicePersona)
-
-            val rate = (request.speechRate * 50 * rateMultiplier / 10000).coerceIn(0, 250)
             
             val pitchArg = if (overridePitch) {
-                (prefPitch * request.pitch / 100).coerceIn(0, 100)
+                prefPitch.coerceIn(0, 100)
             } else {
                 if (request.pitch == 100) {
                     -1
@@ -264,7 +314,10 @@ class EloquenceTtsService : TextToSpeechService() {
 
     override fun onStop() {
         isStopped = true
-        synchronized(lock) { if (handle != 0L) EloquenceNative.nativeStop(handle) }
+        val currentHandle = handle
+        if (currentHandle != 0L) {
+            EloquenceNative.nativeStop(currentHandle)
+        }
     }
 
     private fun deliverBuffer(pcm: ShortArray, len: Int, bytes: ByteArray, maxBytes: Int, callback: SynthesisCallback, targetSampleRate: Int) {
@@ -329,7 +382,7 @@ class EloquenceTtsService : TextToSpeechService() {
             EloquenceNative.nativeShutdown(handle)
             handle = 0L
         }
-        handle = EloquenceNative.nativeInit(filesDir.absolutePath, dialect)
+        handle = EloquenceNative.nativeInit(deContext.filesDir.absolutePath, dialect)
         if (handle == 0L) { Log.e(TAG, "nativeInit failed for dialect 0x%08x".format(dialect)); return false }
         currentDialect = dialect
         return true
@@ -379,6 +432,6 @@ class EloquenceTtsService : TextToSpeechService() {
                 sb.append("Version=6.1\n\n")
             }
         }
-        File(filesDir, "eci.ini").writeText(sb.toString())
+        File(deContext.filesDir, "eci.ini").writeText(sb.toString())
     }
 }

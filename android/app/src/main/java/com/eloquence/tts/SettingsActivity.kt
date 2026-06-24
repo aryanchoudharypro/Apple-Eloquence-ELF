@@ -55,18 +55,10 @@ class SettingsActivity : AppCompatActivity() {
 
     class SettingsFragment : PreferenceFragmentCompat() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
-            setPreferencesFromResource(R.xml.preferences, rootKey)
-            
-            findPreference<androidx.preference.Preference>("pref_about")?.setOnPreferenceClickListener {
-                androidx.appcompat.app.AlertDialog.Builder(requireContext())
-                    .setTitle("About ETI Eloquence")
-                    .setMessage(R.string.about_eloquence)
-                    .setPositiveButton("OK", null)
-                    .show()
-                true
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                preferenceManager.setStorageDeviceProtected()
             }
-            
-
+            setPreferencesFromResource(R.xml.preferences, rootKey)
         }
     }
 }

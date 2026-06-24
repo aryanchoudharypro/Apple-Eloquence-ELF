@@ -127,7 +127,7 @@ Java_com_eloquence_tts_EloquenceNative_nativeInit(JNIEnv *env, jclass clazz,
 
     char path[1024];
     snprintf(path, sizeof path, "%s/eci.so", dataDir);
-    void *lib = dlopen("libeci.so", RTLD_NOW | RTLD_GLOBAL);
+    void *lib = dlopen("libeci.so", RTLD_LAZY | RTLD_GLOBAL);
     (*env)->ReleaseStringUTFChars(env, jDataDir, dataDir);
     if (!lib) { LOGE("dlopen eci.so: %s", dlerror()); return 0; }
 
@@ -330,6 +330,12 @@ Java_com_eloquence_tts_EloquenceNative_nativeShutdown(JNIEnv *env, jclass c, jlo
     (void)env; (void)c;
     Engine *e = (Engine *)(intptr_t)handle;
     if (!e) return;
+    
+    if (e->thread) {
+        pthread_join(e->thread, NULL);
+        e->thread = 0;
+    }
+    
     if (e->Delete) e->Delete(e->eci);
     free(e->pcm);
     /* Intentionally NOT dlclose(e->lib): the engine registers C++ atexit

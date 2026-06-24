@@ -24,13 +24,21 @@
             android:entryValues="@array/language_values"
             app:iconSpaceReserved="false" />
             
+        <SwitchPreferenceCompat
+            android:key="pref_override_rate"
+            android:title="Force Rate"
+            android:summary="Override the system speech rate"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
+            
         <SeekBarPreference
-            android:key="pref_rate_multiplier"
-            android:title="Speech Rate Multiplier"
-            android:summary="Multiply the speech rate requested by the system"
-            android:defaultValue="100"
-            android:max="200"
-            app:min="10"
+            android:key="pref_rate"
+            android:dependency="pref_override_rate"
+            android:title="Speech Rate"
+            android:summary="Adjust the absolute speech rate of the Eloquence voice"
+            android:defaultValue="50"
+            android:max="250"
+            app:min="0"
             app:showSeekBarValue="true"
             app:iconSpaceReserved="false" />
             
@@ -106,14 +114,6 @@
             
     </PreferenceCategory>
     
-    <PreferenceCategory 
-        android:title="About"
-        app:iconSpaceReserved="false">
-        <Preference
-            android:key="pref_about"
-            android:title="About ETI Eloquence"
-            android:summary="Information about the synthesizer, features, and notes"
-            app:iconSpaceReserved="false" />
-    </PreferenceCategory>
+
     
 </PreferenceScreen>

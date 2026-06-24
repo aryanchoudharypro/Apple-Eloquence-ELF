@@ -43,7 +43,7 @@ android {
     // executable code is permitted (writable app storage is not).
     packaging {
         jniLibs {
-            useLegacyPackaging = true
+            useLegacyPackaging = false
         }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
