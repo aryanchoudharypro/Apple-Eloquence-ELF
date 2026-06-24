@@ -25,6 +25,9 @@ import android.speech.tts.TextToSpeechService
 import android.util.Log
 import androidx.preference.PreferenceManager
 import java.io.File
+import java.nio.charset.Charset
+import java.nio.charset.CodingErrorAction
+import java.nio.CharBuffer
 
 private const val TAG = "EloquenceTts"
 private const val SAMPLE_RATE = 11025
@@ -143,17 +146,21 @@ class EloquenceTtsService : TextToSpeechService() {
         if (v == null) { callback.error(); return }
 
         isStopped = false
-        val text = request.charSequenceText?.toString().orEmpty()
+        val text = request.charSequenceText?.toString()?.trim() ?: ""
+        
+        if (text.isBlank()) {
+            callback.done()
+            return
+        }
         
         synchronized(lock) {
-            resamplePhase = 0.0
-            lastSample = 0
             
             if (!ensureEngine(v.dialect)) { callback.error(); return }
             
             val overridePitch = prefs.getBoolean("pref_override_pitch", false)
             val prefPitch = prefs.getInt("pref_pitch", 50)
             val rateMultiplier = prefs.getInt("pref_rate_multiplier", 100)
+            val volume = prefs.getInt("pref_volume", 100)
             val voicePersona = prefs.getString("pref_voice", "1")?.toIntOrNull() ?: 1
             
             // Set the voice persona FIRST so we can query its natural default pitch if needed
@@ -173,7 +180,7 @@ class EloquenceTtsService : TextToSpeechService() {
                 }
             }
             
-            EloquenceNative.nativeSetProsody(handle, rate, pitchArg, -1)
+            EloquenceNative.nativeSetProsody(handle, rate, pitchArg, volume)
 
             val charsetName = when (currentDialect) {
                 0x060000 -> "GB18030"
@@ -184,23 +191,53 @@ class EloquenceTtsService : TextToSpeechService() {
             }
             val enableVoiceTags = prefs.getBoolean("pref_voice_tags", false)
             val stripSsml = prefs.getBoolean("pref_strip_ssml", true)
-            val targetSampleRate = prefs.getString("pref_sample_rate", "11025")?.toIntOrNull() ?: 11025
             
             var filteredText = text
             if (stripSsml) {
-                // Strip XML/SSML tags like <speak>, <prosody>, etc.
-                filteredText = filteredText.replace(Regex("<[^>]*>"), " ")
+                // Strip XML/SSML tags safely (only tags starting with a letter or slash to protect math < and >)
+                filteredText = filteredText.replace(Regex("<[a-zA-Z\\/][^>]*>"), " ").trim()
             }
             if (!enableVoiceTags) {
                 filteredText = filteredText.replace("`", "")
             }
             
-            val bytes = try {
-                filteredText.toByteArray(java.nio.charset.Charset.forName(charsetName))
-            } catch (e: Exception) {
-                filteredText.toByteArray(java.nio.charset.Charset.forName("windows-1252"))
+            if (filteredText.isBlank()) {
+                callback.done()
+                return
             }
 
+            // --- Emoji Support ---
+            val processEmojis = prefs.getBoolean("pref_process_emojis", true)
+            if (processEmojis) {
+                val sb = java.lang.StringBuilder()
+                var i = 0
+                val len = filteredText.length
+                while (i < len) {
+                    val cp = filteredText.codePointAt(i)
+                    val charCount = Character.charCount(cp)
+                    if (cp > 0x7F && android.icu.lang.UCharacter.hasBinaryProperty(cp, android.icu.lang.UProperty.EMOJI)) {
+                        val name = android.icu.lang.UCharacter.getName(cp)
+                        if (name != null) {
+                            sb.append(" ").append(name.lowercase()).append(" ")
+                        }
+                    } else {
+                        sb.appendCodePoint(cp)
+                    }
+                    i += charCount
+                }
+                filteredText = sb.toString()
+            }
+            
+            val bytes = try {
+                filteredText.toByteArray(Charset.forName(charsetName))
+            } catch (e: Exception) {
+                filteredText.toByteArray(Charset.forName("windows-1252"))
+            }
+
+            resamplePhase = 0.0
+            lastSample = 0
+            
+            val targetSampleRate = prefs.getString("pref_sample_rate", "11025")?.toIntOrNull() ?: 11025
             callback.start(targetSampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
             EloquenceNative.nativeStartSynthesis(handle, bytes)
         }
@@ -208,34 +245,18 @@ class EloquenceTtsService : TextToSpeechService() {
         val targetSampleRate = prefs.getString("pref_sample_rate", "11025")?.toIntOrNull() ?: 11025
         val shortBuf = ShortArray(4096)
         val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
-        
         val ratio = if (targetSampleRate > 0) targetSampleRate.toDouble() / SAMPLE_RATE.toDouble() else 1.0
         val maxExpectedShorts = (shortBuf.size * ratio).toInt() + 2
         val byteBuf = ByteArray(maxOf(maxExpectedShorts * 2, maxBytes))
 
-        while (EloquenceNative.nativeIsSpeaking(handle) && !isStopped) {
-            val n = EloquenceNative.nativePollAudio(handle, shortBuf)
-            if (n > 0) {
-                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback, targetSampleRate)
-            } else {
-                Thread.sleep(10)
-            }
-        }
-        
-        // Drain remaining audio
         while (!isStopped) {
-            val n = EloquenceNative.nativePollAudio(handle, shortBuf)
+            val n = EloquenceNative.nativePollAudio(handle, shortBuf) // This now blocks until audio is available
             if (n > 0) {
                 deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback, targetSampleRate)
-            } else {
+            } else if (!EloquenceNative.nativeIsSpeaking(handle)) {
+                // Synthesis finished and buffer is empty
                 break
             }
-        }
-        
-        // Block until the native synthesis thread actually finishes exiting
-        // so we don't start a new synthesis thread while the old one is still cleaning up.
-        while (EloquenceNative.nativeIsSpeaking(handle)) {
-            Thread.sleep(5)
         }
         
         if (isStopped) callback.error() else callback.done()
@@ -321,8 +342,9 @@ class EloquenceTtsService : TextToSpeechService() {
         sb.append("# Path= entries point at the app's read-only native lib dir.\n\n")
 
         val eciIniLines = try {
-            val externalIni = File(getExternalFilesDir(null), "eci.ini")
-            if (externalIni.exists()) {
+            val externalDir = getExternalFilesDir(null)
+            val externalIni = if (externalDir != null) File(externalDir, "eci.ini") else null
+            if (externalIni != null && externalIni.exists()) {
                 externalIni.readLines()
             } else {
                 assets.open("eci.ini").bufferedReader().readLines()

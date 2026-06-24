@@ -2,19 +2,60 @@
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     
-    <PreferenceCategory android:title="Speech Settings">
+    <PreferenceCategory 
+        android:title="Voice Profile"
+        app:iconSpaceReserved="false">
         
-        <SwitchPreferenceCompat
-            android:key="pref_voice_tags"
-            android:title="Enable Voice Tags"
-            android:summary="Allow inline ` backquote voice tags to change voices and sing. Normal backquotes will be treated as code."
-            android:defaultValue="false" />
+        <ListPreference
+            android:key="pref_voice"
+            android:title="Voice Persona"
+            android:summary="Select the Eloquence voice (e.g., Reed, Shelly)"
+            android:defaultValue="1"
+            android:entries="@array/voice_names"
+            android:entryValues="@array/voice_values"
+            app:iconSpaceReserved="false" />
 
+        <ListPreference
+            android:key="pref_language"
+            android:title="Force Language"
+            android:summary="Override the system language (default is System)"
+            android:defaultValue="system"
+            android:entries="@array/language_names"
+            android:entryValues="@array/language_values"
+            app:iconSpaceReserved="false" />
+            
+        <SeekBarPreference
+            android:key="pref_rate_multiplier"
+            android:title="Speech Rate Multiplier"
+            android:summary="Multiply the speech rate requested by the system"
+            android:defaultValue="100"
+            android:max="200"
+            app:min="10"
+            app:showSeekBarValue="true"
+            app:iconSpaceReserved="false" />
+            
+        <SeekBarPreference
+            android:key="pref_volume"
+            android:title="Volume"
+            android:summary="Adjust the base volume of the Eloquence voice"
+            android:defaultValue="100"
+            android:max="100"
+            app:min="0"
+            app:showSeekBarValue="true"
+            app:iconSpaceReserved="false" />
+            
+    </PreferenceCategory>
+    
+    <PreferenceCategory 
+        android:title="Pitch &amp; Intonation"
+        app:iconSpaceReserved="false">
+        
         <SwitchPreferenceCompat
             android:key="pref_override_pitch"
             android:title="Override Default Pitch"
-            android:summary="Enable to manually set the base pitch (like NVDA). Disable to use each voice's natural pitch."
-            android:defaultValue="false" />
+            android:summary="Enable to manually set the base pitch. Disable to use each voice's natural pitch."
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
 
         <SeekBarPreference
             android:key="pref_pitch"
@@ -24,46 +65,55 @@
             android:defaultValue="50"
             android:max="100"
             app:min="0"
-            app:showSeekBarValue="true" />
+            app:showSeekBarValue="true"
+            app:iconSpaceReserved="false" />
             
-        <SeekBarPreference
-            android:key="pref_rate_multiplier"
-            android:title="Speech Rate Multiplier"
-            android:summary="Multiply the speech rate requested by the system"
-            android:defaultValue="100"
-            android:max="200"
-            app:min="10"
-            app:showSeekBarValue="true" />
-            
-        <ListPreference
-            android:key="pref_voice"
-            android:title="Voice Persona"
-            android:summary="Select the Eloquence voice (e.g., Reed, Shelly)"
-            android:defaultValue="1"
-            android:entries="@array/voice_names"
-            android:entryValues="@array/voice_values" />
-
-        <ListPreference
-            android:key="pref_language"
-            android:title="Force Language"
-            android:summary="Override the system language (default is System)"
-            android:defaultValue="system"
-            android:entries="@array/language_names"
-            android:entryValues="@array/language_values" />
+    </PreferenceCategory>
+    
+    <PreferenceCategory 
+        android:title="Advanced Text Processing"
+        app:iconSpaceReserved="false">
+        
         <ListPreference
             android:key="pref_sample_rate"
             android:title="Sample Rate"
             android:summary="Upsample the 11025 Hz engine output for higher quality playback"
             android:defaultValue="11025"
             android:entries="@array/sample_rate_names"
-            android:entryValues="@array/sample_rate_values" />
+            android:entryValues="@array/sample_rate_values"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="pref_process_emojis"
+            android:title="Emoji Support"
+            android:summary="Translate emojis to spoken text"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
+
+        <SwitchPreferenceCompat
+            android:key="pref_voice_tags"
+            android:title="Enable Voice Tags"
+            android:summary="Allow inline ` backquote voice tags to change voices and sing. Normal backquotes will be treated as code."
+            android:defaultValue="false"
+            app:iconSpaceReserved="false" />
 
         <SwitchPreferenceCompat
             android:key="pref_strip_ssml"
             android:title="Ignore SSML Tags"
             android:summary="Strip XML/SSML tags from the text before speaking"
-            android:defaultValue="true" />
+            android:defaultValue="true"
+            app:iconSpaceReserved="false" />
             
+    </PreferenceCategory>
+    
+    <PreferenceCategory 
+        android:title="About"
+        app:iconSpaceReserved="false">
+        <Preference
+            android:key="pref_about"
+            android:title="About ETI Eloquence"
+            android:summary="Information about the synthesizer, features, and notes"
+            app:iconSpaceReserved="false" />
     </PreferenceCategory>
     
 </PreferenceScreen>

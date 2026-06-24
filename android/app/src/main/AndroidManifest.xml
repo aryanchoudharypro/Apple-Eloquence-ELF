@@ -2,17 +2,21 @@
 <!-- SPDX-License-Identifier: MIT -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:label="@string/app_name"
         android:allowBackup="true"
         android:extractNativeLibs="true">
 
-        <activity android:name=".SettingsActivity" android:exported="true" android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+        <activity android:name=".SettingsActivity" android:exported="true" android:theme="@style/Theme.Eloquence">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+
 
         <!-- The TextToSpeechService. The system enumerates engines by the
              TTS_SERVICE intent filter; the meta-data points at the engine
@@ -22,7 +26,7 @@
             android:label="@string/engine_label"
             android:permission="android.permission.BIND_TEXT_TO_SPEECH"
             android:exported="true"
-            android:directBootAware="false">
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.intent.action.TTS_SERVICE" />
                 <category android:name="android.intent.category.DEFAULT" />

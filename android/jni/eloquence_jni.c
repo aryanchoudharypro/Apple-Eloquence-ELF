@@ -77,6 +77,7 @@ typedef struct {
     long   pcm_read;
     int    abort;
     pthread_mutex_t mutex;
+    pthread_cond_t cond;
     pthread_t thread;
     int    is_speaking;
 } Engine;
@@ -102,6 +103,7 @@ static enum ECICallbackReturn pcm_cb(ECIHand h, enum ECIMessage msg,
     }
     memcpy(e->pcm + e->pcm_len, e->chunk, (size_t)lParam * sizeof(short));
     e->pcm_len += lParam;
+    pthread_cond_signal(&e->cond);
     pthread_mutex_unlock(&e->mutex);
     return eciDataProcessed;
 }
@@ -133,6 +135,7 @@ Java_com_eloquence_tts_EloquenceNative_nativeInit(JNIEnv *env, jclass clazz,
     if (!e) { dlclose(lib); return 0; }
     e->lib = lib;
     pthread_mutex_init(&e->mutex, NULL);
+    pthread_cond_init(&e->cond, NULL);
 
     fn_NewEx            NewEx            = (fn_NewEx)sym(lib, "eciNewEx");
     fn_New              New              = (fn_New)sym(lib, "eciNew");
@@ -232,6 +235,7 @@ static void *synth_thread(void *arg) {
     
     pthread_mutex_lock(&e->mutex);
     e->is_speaking = 0;
+    pthread_cond_broadcast(&e->cond);
     pthread_mutex_unlock(&e->mutex);
     return NULL;
 }
@@ -288,6 +292,16 @@ Java_com_eloquence_tts_EloquenceNative_nativePollAudio(JNIEnv *env, jclass c, jl
     
     jsize max_len = (*env)->GetArrayLength(env, outBuf);
     pthread_mutex_lock(&e->mutex);
+    
+    /* Wait for data instead of forcing Kotlin to poll with Thread.sleep */
+    while (e->pcm_len == e->pcm_read && e->is_speaking && !e->abort) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100000000; /* 100ms timeout */
+        if (ts.tv_nsec >= 1000000000) { ts.tv_nsec -= 1000000000; ts.tv_sec += 1; }
+        pthread_cond_timedwait(&e->cond, &e->mutex, &ts);
+    }
+
     long avail = e->pcm_len - e->pcm_read;
     long to_copy = (avail > max_len) ? max_len : avail;
     if (to_copy > 0) {
@@ -306,6 +320,7 @@ Java_com_eloquence_tts_EloquenceNative_nativeStop(JNIEnv *env, jclass c, jlong h
     pthread_mutex_lock(&e->mutex);
     e->abort = 1;
     e->pcm_read = e->pcm_len; // discard all pending audio instantly
+    pthread_cond_broadcast(&e->cond);
     pthread_mutex_unlock(&e->mutex);
     if (e->Stop) e->Stop(e->eci);
 }

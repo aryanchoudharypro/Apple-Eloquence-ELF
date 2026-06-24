@@ -3,4 +3,25 @@
 <resources>
     <string name="app_name">Eloquence TTS</string>
     <string name="engine_label">Apple Eloquence (ETI)</string>
+    <string name="about_eloquence"><![CDATA[Eloquence Text To Speech (TTS) is an Android ported version of the most popular synthesizer for people who are blind or visually impaired, ETI-Eloquence Text-To-Speech voice synthesizer.
+
+Eloquence is a TTS engine that you can use in a wide range of applications such as:
+- Screen readers and applications for people who are blind or visually impaired (like Talkback)
+- GPS or navigation software
+- E-book readers
+- Translators
+- And many more!
+
+*** IMPORTANT NOTE ***
+- Some applications force using their own voices. For example Google Maps or Gemini AI assistant, ignore system text-to-speech preferred settings, only allowing Google TTS. There are always alternatives that are compatible with Android Text to speech APIs, but please make sure that your desired app os scenario is compatible with those.
+- The app requires an active and unrestricted Internet connection.
+- Eloquence app is free to download but requires a subscription to activate the 7 days trial and use the TTS without the registration message
+***************************
+
+The main features of Eloquence TTS are:
+- 10 languages included with your subscription: US English, UK English, Spanish (Spain), Spanish (Mexico), German, Finnish (Finland), French (France), French (Canada), Italian and Portuguese (Brazil)
+- 8 different voice profiles: (Reed, Shelly, Bobby, Rocko, Glen, Sandy, Grandma and Grandpa)
+- Speed, pitch and volume configuration
+- User Dictionary: possibility to add, edit or remove words from a dictionary to customize the pronunciation
+- Emoji support]]></string>
 </resources>
