@@ -55,7 +55,7 @@ typedef void    (*fn_RegisterCallback)(ECIHand, ECICallback, void *);
 typedef int     (*fn_SetOutputBuffer)(ECIHand, int, short *);
 
 /* One engine instance per native handle. */
-#define CHUNK_SAMPLES 1024
+#define CHUNK_SAMPLES 256
 typedef struct {
     void *lib;                 /* dlopen handle for eci.so                    */
     ECIHand eci;               /* engine handle                              */
@@ -160,7 +160,10 @@ Java_com_eloquence_tts_EloquenceNative_nativeInit(JNIEnv *env, jclass clazz,
 
     RegisterCallback(e->eci, pcm_cb, e);               /* before SetOutputBuffer */
     e->SetOutputBuffer(e->eci, CHUNK_SAMPLES, e->chunk);
-    if (e->SetParam) e->SetParam(e->eci, eciSampleRate, 1);  /* 11025 Hz (Apple) */
+    if (e->SetParam) {
+        e->SetParam(e->eci, 0, 1); /* eciInputType = 1 (Annotated text mode) */
+        e->SetParam(e->eci, 1, 1); /* eciSampleRate = 1 (11025 Hz) */
+    }
 
     char ver[64] = {0};
     fn_Version Version = (fn_Version)dlsym(lib, "eciVersion");

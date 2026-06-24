@@ -5,6 +5,12 @@
     <PreferenceCategory android:title="Speech Settings">
         
         <SwitchPreferenceCompat
+            android:key="pref_voice_tags"
+            android:title="Enable Voice Tags"
+            android:summary="Allow inline ` backquote voice tags to change voices and sing. Normal backquotes will be treated as code."
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
             android:key="pref_override_pitch"
             android:title="Override Default Pitch"
             android:summary="Enable to manually set the base pitch (like NVDA). Disable to use each voice's natural pitch."
@@ -44,6 +50,19 @@
             android:defaultValue="system"
             android:entries="@array/language_names"
             android:entryValues="@array/language_values" />
+        <ListPreference
+            android:key="pref_sample_rate"
+            android:title="Sample Rate"
+            android:summary="Upsample the 11025 Hz engine output for higher quality playback"
+            android:defaultValue="11025"
+            android:entries="@array/sample_rate_names"
+            android:entryValues="@array/sample_rate_values" />
+
+        <SwitchPreferenceCompat
+            android:key="pref_strip_ssml"
+            android:title="Ignore SSML Tags"
+            android:summary="Strip XML/SSML tags from the text before speaking"
+            android:defaultValue="true" />
             
     </PreferenceCategory>
     

@@ -57,4 +57,17 @@
         <item>jpn-JPN</item>
         <item>kor-KOR</item>
     </string-array>
+    <string-array name="sample_rate_names">
+        <item>11025 Hz (Native)</item>
+        <item>16000 Hz</item>
+        <item>22050 Hz</item>
+        <item>44100 Hz</item>
+    </string-array>
+    
+    <string-array name="sample_rate_values">
+        <item>11025</item>
+        <item>16000</item>
+        <item>22050</item>
+        <item>44100</item>
+    </string-array>
 </resources>

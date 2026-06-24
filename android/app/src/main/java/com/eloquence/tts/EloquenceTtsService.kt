@@ -62,11 +62,37 @@ class EloquenceTtsService : TextToSpeechService() {
     private var currentDialect: Int = 0
     private val lock = Any()
     @Volatile private var isStopped = false
+    
+    // Resampler state
+    private var resamplePhase: Double = 0.0
+    private var lastSample: Short = 0
 
     override fun onCreate() {
         // Engine + eci.ini must exist before the base class wires up languages.
         writeEciIni()
-        ensureEngine(VOICES.first().dialect)
+        
+        val prefs = PreferenceManager.getDefaultSharedPreferences(this)
+        val forceLang = prefs.getString("pref_language", "system") ?: "system"
+        var dialectToLoad = VOICES.first().dialect
+        
+        if (forceLang != "system") {
+            val lang = forceLang.substring(0, 3)
+            val country = if (forceLang.length >= 7) forceLang.substring(4, 7) else ""
+            dialectToLoad = match(lang, country)?.dialect ?: dialectToLoad
+        } else {
+            try {
+                val locale = java.util.Locale.getDefault()
+                val lang = locale.isO3Language
+                val country = locale.isO3Country
+                dialectToLoad = match(lang, country)?.dialect 
+                    ?: match(lang, "")?.dialect 
+                    ?: dialectToLoad
+            } catch (e: Exception) {
+                // Ignore missing resource exceptions
+            }
+        }
+        
+        ensureEngine(dialectToLoad)
         super.onCreate()
     }
 
@@ -120,6 +146,9 @@ class EloquenceTtsService : TextToSpeechService() {
         val text = request.charSequenceText?.toString().orEmpty()
         
         synchronized(lock) {
+            resamplePhase = 0.0
+            lastSample = 0
+            
             if (!ensureEngine(v.dialect)) { callback.error(); return }
             
             val overridePitch = prefs.getBoolean("pref_override_pitch", false)
@@ -153,25 +182,41 @@ class EloquenceTtsService : TextToSpeechService() {
                 0x060001 -> "Big5"
                 else -> "windows-1252"
             }
+            val enableVoiceTags = prefs.getBoolean("pref_voice_tags", false)
+            val stripSsml = prefs.getBoolean("pref_strip_ssml", true)
+            val targetSampleRate = prefs.getString("pref_sample_rate", "11025")?.toIntOrNull() ?: 11025
+            
+            var filteredText = text
+            if (stripSsml) {
+                // Strip XML/SSML tags like <speak>, <prosody>, etc.
+                filteredText = filteredText.replace(Regex("<[^>]*>"), " ")
+            }
+            if (!enableVoiceTags) {
+                filteredText = filteredText.replace("`", "")
+            }
             
             val bytes = try {
-                text.toByteArray(java.nio.charset.Charset.forName(charsetName))
+                filteredText.toByteArray(java.nio.charset.Charset.forName(charsetName))
             } catch (e: Exception) {
-                text.toByteArray(java.nio.charset.Charset.forName("windows-1252"))
+                filteredText.toByteArray(java.nio.charset.Charset.forName("windows-1252"))
             }
 
-            callback.start(SAMPLE_RATE, AudioFormat.ENCODING_PCM_16BIT, 1)
+            callback.start(targetSampleRate, AudioFormat.ENCODING_PCM_16BIT, 1)
             EloquenceNative.nativeStartSynthesis(handle, bytes)
         }
 
+        val targetSampleRate = prefs.getString("pref_sample_rate", "11025")?.toIntOrNull() ?: 11025
         val shortBuf = ShortArray(4096)
         val maxBytes = callback.maxBufferSize.coerceAtLeast(2)
-        val byteBuf = ByteArray(maxOf(shortBuf.size * 2, maxBytes))
+        
+        val ratio = if (targetSampleRate > 0) targetSampleRate.toDouble() / SAMPLE_RATE.toDouble() else 1.0
+        val maxExpectedShorts = (shortBuf.size * ratio).toInt() + 2
+        val byteBuf = ByteArray(maxOf(maxExpectedShorts * 2, maxBytes))
 
         while (EloquenceNative.nativeIsSpeaking(handle) && !isStopped) {
             val n = EloquenceNative.nativePollAudio(handle, shortBuf)
             if (n > 0) {
-                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback, targetSampleRate)
             } else {
                 Thread.sleep(10)
             }
@@ -181,7 +226,7 @@ class EloquenceTtsService : TextToSpeechService() {
         while (!isStopped) {
             val n = EloquenceNative.nativePollAudio(handle, shortBuf)
             if (n > 0) {
-                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback)
+                deliverBuffer(shortBuf, n, byteBuf, maxBytes, callback, targetSampleRate)
             } else {
                 break
             }
@@ -201,14 +246,47 @@ class EloquenceTtsService : TextToSpeechService() {
         synchronized(lock) { if (handle != 0L) EloquenceNative.nativeStop(handle) }
     }
 
-    private fun deliverBuffer(pcm: ShortArray, len: Int, bytes: ByteArray, maxBytes: Int, callback: SynthesisCallback) {
+    private fun deliverBuffer(pcm: ShortArray, len: Int, bytes: ByteArray, maxBytes: Int, callback: SynthesisCallback, targetSampleRate: Int) {
         if (isStopped) return
-        for (i in 0 until len) {
-            bytes[i * 2]     = (pcm[i].toInt() and 0xFF).toByte()
-            bytes[i * 2 + 1] = ((pcm[i].toInt() shr 8) and 0xFF).toByte()
+        
+        var outPcm = pcm
+        var outLen = len
+        
+        // Linear interpolation resampler
+        if (targetSampleRate != SAMPLE_RATE && targetSampleRate > 0) {
+            val ratio = targetSampleRate.toDouble() / SAMPLE_RATE.toDouble()
+            val maxOutLen = (len * ratio).toInt() + 2
+            val resampled = ShortArray(maxOutLen)
+            var outIdx = 0
+            
+            val step = SAMPLE_RATE.toDouble() / targetSampleRate.toDouble()
+            var srcPhase = resamplePhase
+            
+            while (srcPhase < len - 1) {
+                val srcIdx = Math.floor(srcPhase).toInt()
+                val frac = srcPhase - srcIdx
+                val s1 = if (srcIdx < 0) lastSample else pcm[srcIdx]
+                val s2 = if (srcIdx + 1 < 0) lastSample else pcm[srcIdx + 1]
+                
+                resampled[outIdx++] = (s1 + (s2 - s1) * frac).toInt().toShort()
+                srcPhase += step
+            }
+            
+            resamplePhase = srcPhase - len
+            if (len > 0) {
+                lastSample = pcm[len - 1]
+            }
+            
+            outPcm = resampled
+            outLen = outIdx
+        }
+
+        for (i in 0 until outLen) {
+            bytes[i * 2]     = (outPcm[i].toInt() and 0xFF).toByte()
+            bytes[i * 2 + 1] = ((outPcm[i].toInt() shr 8) and 0xFF).toByte()
         }
         var off = 0
-        val totalBytes = len * 2
+        val totalBytes = outLen * 2
         while (off < totalBytes) {
             if (isStopped) return
             val n = minOf(maxBytes, totalBytes - off)
@@ -256,13 +334,8 @@ class EloquenceTtsService : TextToSpeechService() {
         if (eciIniLines.isNotEmpty()) {
             for (line in eciIniLines) {
                 when {
-                    line.startsWith("Path=.\\") -> {
-                        val module = line.substringAfter(".\\").substringBefore(".syn")
-                        sb.append("Path=$libDir/lib$module.so\n")
-                    }
-                    line.startsWith("Path_Rom=.\\") -> {
-                        val module = line.substringAfter(".\\").substringBefore(".dll")
-                        sb.append("Path_Rom=$libDir/lib$module.so\n")
+                    line.startsWith("Path=") || line.startsWith("Path_Rom=") -> {
+                        sb.append(line).append("\n")
                     }
                     line.startsWith("Phoneme") -> {
                         // Skip Phoneme adjustments to prevent buffer overflow in 64-bit engine
@@ -279,8 +352,8 @@ class EloquenceTtsService : TextToSpeechService() {
                 val hi = (v.dialect ushr 16) and 0xFFFF
                 val lo = v.dialect and 0xFFFF
                 sb.append("[$hi.$lo]\n")
-                sb.append("Path=$libDir/lib${v.module}.so\n")
-                v.romanizer?.let { sb.append("Path_Rom=$libDir/lib$it.so\n") }
+                sb.append("Path=lib${v.module}.so\n")
+                v.romanizer?.let { sb.append("Path_Rom=lib$it.so\n") }
                 sb.append("Version=6.1\n\n")
             }
         }
