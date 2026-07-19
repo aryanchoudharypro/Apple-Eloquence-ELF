@@ -64,6 +64,7 @@ class EloquenceTtsService : TextToSpeechService() {
     private var handle: Long = 0
     private var currentDialect: Int = 0
     private val lock = Any()
+    private val stopLock = Any()
     @Volatile private var isStopped = false
     
     // Resampler state
@@ -111,7 +112,9 @@ class EloquenceTtsService : TextToSpeechService() {
 
     override fun onDestroy() {
         synchronized(lock) {
-            if (handle != 0L) { EloquenceNative.nativeShutdown(handle); handle = 0 }
+            synchronized(stopLock) {
+                if (handle != 0L) { EloquenceNative.nativeShutdown(handle); handle = 0 }
+            }
         }
         super.onDestroy()
     }
@@ -221,13 +224,9 @@ class EloquenceTtsService : TextToSpeechService() {
             val pitchArg = if (overridePitch) {
                 prefPitch.coerceIn(0, 100)
             } else {
-                if (request.pitch == 100) {
-                    -1
-                } else {
-                    val base = EloquenceNative.nativeGetPitch(handle)
-                    val effectiveBase = if (base > 0) base else 65
-                    (effectiveBase * request.pitch / 100).coerceIn(0, 100)
-                }
+                val basePitches = intArrayOf(65, 81, 93, 56, 89, 68, 61, 69)
+                val base = if (voicePersona in 1..8) basePitches[voicePersona - 1] else 65
+                (base * request.pitch / 100).coerceIn(0, 100)
             }
             
             EloquenceNative.nativeSetProsody(handle, rate, pitchArg, volume)
@@ -314,9 +313,10 @@ class EloquenceTtsService : TextToSpeechService() {
 
     override fun onStop() {
         isStopped = true
-        val currentHandle = handle
-        if (currentHandle != 0L) {
-            EloquenceNative.nativeStop(currentHandle)
+        synchronized(stopLock) {
+            if (handle != 0L) {
+                EloquenceNative.nativeStop(handle)
+            }
         }
     }
 
@@ -337,6 +337,7 @@ class EloquenceTtsService : TextToSpeechService() {
             var srcPhase = resamplePhase
             
             while (srcPhase < len - 1) {
+                if (outIdx >= resampled.size) break
                 val srcIdx = Math.floor(srcPhase).toInt()
                 val frac = srcPhase - srcIdx
                 val s1 = if (srcIdx < 0) lastSample else pcm[srcIdx]
@@ -356,6 +357,7 @@ class EloquenceTtsService : TextToSpeechService() {
         }
 
         for (i in 0 until outLen) {
+            if (i * 2 + 1 >= bytes.size) break
             bytes[i * 2]     = (outPcm[i].toInt() and 0xFF).toByte()
             bytes[i * 2 + 1] = ((outPcm[i].toInt() shr 8) and 0xFF).toByte()
         }
@@ -364,7 +366,11 @@ class EloquenceTtsService : TextToSpeechService() {
         while (off < totalBytes) {
             if (isStopped) return
             val n = minOf(maxBytes, totalBytes - off)
-            if (callback.audioAvailable(bytes, off, n) != TextToSpeech.SUCCESS) break
+            try {
+                if (callback.audioAvailable(bytes, off, n) != TextToSpeech.SUCCESS) break
+            } catch (e: Exception) {
+                break
+            }
             off += n
         }
     }
@@ -379,11 +385,16 @@ class EloquenceTtsService : TextToSpeechService() {
                 currentDialect = dialect
                 return true
             }
-            EloquenceNative.nativeShutdown(handle)
-            handle = 0L
+            synchronized(stopLock) {
+                EloquenceNative.nativeShutdown(handle)
+                handle = 0L
+            }
         }
-        handle = EloquenceNative.nativeInit(deContext.filesDir.absolutePath, dialect)
-        if (handle == 0L) { Log.e(TAG, "nativeInit failed for dialect 0x%08x".format(dialect)); return false }
+        val newHandle = EloquenceNative.nativeInit(deContext.filesDir.absolutePath, dialect)
+        if (newHandle == 0L) { Log.e(TAG, "nativeInit failed for dialect 0x%08x".format(dialect)); return false }
+        synchronized(stopLock) {
+            handle = newHandle
+        }
         currentDialect = dialect
         return true
     }
